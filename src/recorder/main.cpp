@@ -1,9 +1,6 @@
-#include <imgui/imgui.h>
-#include <imgui/backends/imgui_impl_glfw.h>
-#include <imgui/backends/imgui_impl_opengl3.h>
-#include <stdio.h>
-#define GL_SILENCE_DEPRECATION
 #include <GLFW/glfw3.h>
+#include <imgui/imgui.h>
+#include <stdio.h>
 
 static void glfw_error_callback(int error, const char* description)
 {
@@ -16,36 +13,6 @@ int main(int, char**)
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit())
         return 1;
-
-    // Decide GL+GLSL versions
-    // GL 3.0 + GLSL 130
-    const char* glsl_version = "#version 130";
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
-    //glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);  // 3.2+ only
-    //glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);            // 3.0+ only
-
-    // Create window with graphics context
-    GLFWwindow* window = glfwCreateWindow(1280, 720, "Test Recorder", nullptr, nullptr);
-    if (window == nullptr)
-        return 1;
-    glfwMakeContextCurrent(window);
-    glfwSwapInterval(1); // Enable vsync
-
-    // Setup Dear ImGui context
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO(); (void)io;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
-
-    // Setup Dear ImGui style
-    ImGui::StyleColorsDark();
-    //ImGui::StyleColorsLight();
-
-    // Setup Platform/Renderer backends
-    ImGui_ImplGlfw_InitForOpenGL(window, true);
-    ImGui_ImplOpenGL3_Init(glsl_version);
 
     // Our state
     bool show_demo_window = true;
@@ -118,7 +85,35 @@ int main(int, char**)
                 }
 
                 //// Next button on the same horizontal line.
-                //ImGui::SameLine();
+                ImGui::SameLine();
+
+                ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f)); // 50% transparent background
+                if (ImGui::BeginPopup("TransparentPopup", ImGuiWindowFlags_AlwaysAutoResize))
+                {
+                    // Option 1: Push a style color override for the window background.
+                    // The fourth parameter is the alpha (transparency) value, where 0.0 is fully transparent.
+
+                    // Optionally, you can disable the window decorations if needed.
+
+                    // Create the window as a popup with the adjusted flags.
+                    if (ImGui::BeginChild("PopupContent", ImVec2(300, 100)))
+                    {
+                        ImGui::Text("Set Recording area...");
+                        // Additional UI elements here...
+                    }
+                    ImGui::EndChild();
+
+                    ImGui::EndPopup();
+                }
+
+                // Pop the style override for the window background.
+                ImGui::PopStyleColor();
+
+                // Trigger or open the popup (for example, on a button click)
+                if (ImGui::Button("Open Transparent Popup"))
+                {
+                    ImGui::OpenPopup("TransparentPopup");
+                }
 
                 //// Icon Button 2
                 //if (ImGui::ImageButton(iconTexture2, ImVec2(iconSize, iconSize)))

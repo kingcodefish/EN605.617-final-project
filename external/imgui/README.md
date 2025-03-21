@@ -1,0 +1,1 @@
+DearImgui is a bit strange in that it expects its libraries to be housed within your own codebase, so it doesn't provide a build system setup to build / link against. We provide an additional CMakeLists.txt here to produce a dynamically linked target for imgui.
