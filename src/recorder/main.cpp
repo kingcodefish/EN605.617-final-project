@@ -5,9 +5,191 @@
 #define GL_SILENCE_DEPRECATION
 #include <GLFW/glfw3.h>
 
+#include <iostream>
+
+#ifdef WIN32
+#include <windows.h>
+#endif
+
 static void glfw_error_callback(int error, const char* description)
 {
     fprintf(stderr, "GLFW Error %d: %s\n", error, description);
+}
+
+HHOOK mouseHook;
+HWND highlightedHwnd = NULL; // Store the currently highlighted window
+
+// Get the horizontal and vertical screen sizes in pixel
+inline POINT get_window_resolution(const HWND window_handle)
+{
+    RECT rectangle;
+    GetClientRect(window_handle, &rectangle);
+    const POINT coordinates{ rectangle.right, rectangle.bottom };
+    return coordinates;
+}
+
+#include <iostream>
+#include <ole2.h>
+#include <olectl.h>
+
+inline bool save_bitmap(const LPCSTR file_path,
+    const HBITMAP bitmap, const HPALETTE palette)
+{
+    PICTDESC pict_description;
+
+    pict_description.cbSizeofstruct = sizeof(PICTDESC);
+    pict_description.picType = PICTYPE_BITMAP;
+    pict_description.bmp.hbitmap = bitmap;
+    pict_description.bmp.hpal = palette;
+
+    LPPICTURE picture;
+    auto initial_result = OleCreatePictureIndirect(&pict_description, IID_IPicture, false,
+        reinterpret_cast<void**>(&picture));
+
+    if (!SUCCEEDED(initial_result))
+    {
+        return false;
+    }
+
+    LPSTREAM stream;
+    initial_result = CreateStreamOnHGlobal(nullptr, true, &stream);
+
+    if (!SUCCEEDED(initial_result))
+    {
+        picture->Release();
+        return false;
+    }
+
+    LONG bytes_streamed;
+    initial_result = picture->SaveAsFile(stream, true, &bytes_streamed);
+
+    const auto file = CreateFile(file_path, GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+
+    if (!SUCCEEDED(initial_result) || !file)
+    {
+        stream->Release();
+        picture->Release();
+        return false;
+    }
+
+    HGLOBAL mem = nullptr;
+    GetHGlobalFromStream(stream, &mem);
+    const auto data = GlobalLock(mem);
+
+    DWORD bytes_written;
+    auto result = WriteFile(file, data, bytes_streamed, &bytes_written, nullptr);
+    result &= bytes_written == static_cast<DWORD>(bytes_streamed);
+
+    GlobalUnlock(mem);
+    CloseHandle(file);
+
+    stream->Release();
+    picture->Release();
+
+    return result;
+}
+
+inline POINT get_client_window_position(const HWND window_handle)
+{
+    RECT rectangle;
+
+    GetClientRect(window_handle, static_cast<LPRECT>(&rectangle));
+    MapWindowPoints(window_handle, nullptr, reinterpret_cast<LPPOINT>(&rectangle), 2);
+
+    const POINT coordinates = { rectangle.left, rectangle.top };
+
+    return coordinates;
+}
+
+// https://stackoverflow.com/a/9525788/3764804
+inline bool capture_screen_client_window(const HWND window_handle, const POINT mouse_pos, const LPCSTR file_path)
+{
+    SetActiveWindow(window_handle);
+
+    const auto hdc_source = GetDC(window_handle);
+    const auto hdc_memory = CreateCompatibleDC(hdc_source);
+
+    const auto window_resolution = get_window_resolution(window_handle);
+
+    const auto width = window_resolution.x;
+    const auto height = window_resolution.y;
+
+    const auto client_window_position = get_client_window_position(window_handle);
+
+    auto h_bitmap = CreateCompatibleBitmap(hdc_source, width, height);
+    const auto h_bitmap_old = static_cast<HBITMAP>(SelectObject(hdc_memory, h_bitmap));
+
+    BitBlt(hdc_memory, 0, 0, width, height, hdc_source, client_window_position.x, client_window_position.y, SRCCOPY);
+
+    POINT mouseRelative = { mouse_pos.x - client_window_position.x, mouse_pos.y - client_window_position.y };
+    HBRUSH hBlueBrush = CreateSolidBrush(RGB(255, 0, 0));
+    SelectObject(hdc_memory, hBlueBrush);
+    Ellipse(hdc_memory, mouseRelative.x - 10, mouseRelative.y - 10, mouseRelative.x + 10, mouseRelative.y + 10);
+    DeleteObject(hBlueBrush);
+
+    h_bitmap = static_cast<HBITMAP>(SelectObject(hdc_memory, h_bitmap_old));
+
+    DeleteDC(hdc_source);
+    DeleteDC(hdc_memory);
+
+    const HPALETTE h_palette = nullptr;
+    if (save_bitmap(file_path, h_bitmap, h_palette))
+    {
+        return true;
+    }
+
+    return false;
+}
+
+LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (nCode == HC_ACTION) {
+        if (wParam == WM_LBUTTONDOWN) {
+            // Get the mouse position
+            MSLLHOOKSTRUCT* pMouseStruct = (MSLLHOOKSTRUCT*)lParam;
+            POINT pt = pMouseStruct->pt;
+
+            // Get the HWND of the window under the mouse cursor
+            HWND hwnd = WindowFromPoint(pt);
+            if (hwnd) {
+                // The hwnd might not represent the full application, see if there
+                // is a common ancestor first
+                if (GetParent(hwnd))
+                    hwnd = GetParent(hwnd);
+                std::cout << "Clicked window HWND: " << hwnd << std::endl;
+                highlightedHwnd = hwnd;
+            }
+        }
+    }
+    return CallNextHookEx(mouseHook, nCode, wParam, lParam);
+}
+
+LRESULT CALLBACK RecordingProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (nCode == HC_ACTION) {
+        MSLLHOOKSTRUCT* pMouseStruct = (MSLLHOOKSTRUCT*)lParam;
+        POINT pt = pMouseStruct->pt;
+
+        // Get the HWND of the window under the mouse cursor
+        HWND hwnd = WindowFromPoint(pt);
+        if (hwnd)
+        {
+            // The hwnd might not represent the full application, see if there
+            // is a common ancestor first
+            if (GetParent(hwnd))
+                hwnd = GetParent(hwnd);
+
+            if (hwnd && highlightedHwnd && hwnd == highlightedHwnd) {
+                if (wParam == WM_LBUTTONDOWN) {
+                    std::cout << "Click occurred at (" << pt.x << ", " << pt.y << ")" << std::endl;
+
+                    //auto bitmap = CaptureWindow(hwnd);
+                    //SaveBitmapToFile(bitmap, "C:\\My_Work\\test.bmp");
+                    capture_screen_client_window(hwnd, pt, "C:\\My_Work\\test.bmp");
+                }
+            }
+        }
+    }
+    return CallNextHookEx(mouseHook, nCode, wParam, lParam);
 }
 
 // Main code
@@ -48,6 +230,7 @@ int main(int, char**)
 
     // Our state
     bool show_recording_window = false;
+    bool recording = false;
     ImVec4 clear_color = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
 
     // Main loop
@@ -77,7 +260,6 @@ int main(int, char**)
         ImGui::SetNextWindowSize(viewport->Size);
         if (ImGui::Begin("Main Window Layout", 0, flags))
         {
-
             if (ImGui::BeginMenuBar())
             {
                 if (ImGui::BeginMenu("File"))
@@ -109,32 +291,50 @@ int main(int, char**)
                 // Optionally change spacing between buttons.
                 ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 4));
 
-                // Icon Button 1
-                if (ImGui::Button("Record"))
+                ImGui::PushStyleColor(ImGuiCol_Header, (ImVec4)ImColor(150, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_HeaderHovered, (ImVec4)ImColor(100, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_HeaderActive, (ImVec4)ImColor(130, 0, 0));
+                if (ImGui::Selectable("Record", &recording, !highlightedHwnd ? ImGuiSelectableFlags_Disabled : 0, ImVec2(50, 20)))
                 {
-                    // Handle icon 1 click event
-                }
+                    HHOOK mouseHook = SetWindowsHookEx(WH_MOUSE_LL, RecordingProc, NULL, 0);
+                    if (!mouseHook) {
+                        std::cerr << "Failed to set mouse hook!" << std::endl;
+                        return -1;
+                    }
 
-                //// Next button on the same horizontal line.
+                    // Message loop
+                    MSG msg;
+                    while (GetMessage(&msg, NULL, 0, 0)) {
+                        TranslateMessage(&msg);
+                        DispatchMessage(&msg);
+                    }
+
+                    // Unhook the mouse hook
+                    UnhookWindowsHookEx(mouseHook);
+                }
+                ImGui::PopStyleColor(3);
+
                 ImGui::SameLine();
 
-                if (show_recording_window && ImGui::Begin("Record...", 0, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMouseInputs | ImGuiWindowFlags_NoInputs))
+                if (ImGui::Button("Select Application"))
                 {
-                    ImGui::GetWindowViewport()->Flags |= ImGuiViewportFlags_TopMost;
-                    ImGui::End();
-                }
+                    highlightedHwnd = NULL;
+                    HHOOK mouseHook = SetWindowsHookEx(WH_MOUSE_LL, MouseHookProc, NULL, 0);
+                    if (!mouseHook) {
+                        std::cerr << "Failed to set mouse hook!" << std::endl;
+                        return -1;
+                    }
 
-                // Trigger or open the popup (for example, on a button click)
-                if (ImGui::Button("Set Recording area..."))
-                {
-                    show_recording_window = !show_recording_window;
-                }
+                    // Message loop
+                    MSG msg;
+                    while (highlightedHwnd == NULL && GetMessage(&msg, NULL, 0, 0)) {
+                        TranslateMessage(&msg);
+                        DispatchMessage(&msg);
+                    }
 
-                //// Icon Button 2
-                //if (ImGui::ImageButton(iconTexture2, ImVec2(iconSize, iconSize)))
-                //{
-                //    // Handle icon 2 click event
-                //}
+                    // Unhook the mouse hook
+                    UnhookWindowsHookEx(mouseHook);
+                }
 
                 ImGui::PopStyleVar(); // Restore item spacing
 
