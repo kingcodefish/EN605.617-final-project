@@ -1,6 +1,9 @@
-#include <GLFW/glfw3.h>
 #include <imgui/imgui.h>
+#include <imgui/backends/imgui_impl_glfw.h>
+#include <imgui/backends/imgui_impl_opengl3.h>
 #include <stdio.h>
+#define GL_SILENCE_DEPRECATION
+#include <GLFW/glfw3.h>
 
 static void glfw_error_callback(int error, const char* description)
 {
@@ -14,9 +17,37 @@ int main(int, char**)
     if (!glfwInit())
         return 1;
 
+    // Decide GL+GLSL versions
+    // GL 3.0 + GLSL 130
+    const char* glsl_version = "#version 130";
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+    glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, GLFW_TRUE);
+
+    // Create window with graphics context
+    GLFWwindow* window = glfwCreateWindow(1280, 720, "Test Recorder", nullptr, nullptr);
+    if (window == nullptr)
+        return 1;
+    glfwMakeContextCurrent(window);
+    glfwSwapInterval(1); // Enable vsync
+
+    // Setup Dear ImGui context
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
+
+    // Setup Dear ImGui style
+    ImGui::StyleColorsDark();
+
+    // Setup Platform/Renderer backends
+    ImGui_ImplGlfw_InitForOpenGL(window, true);
+    ImGui_ImplOpenGL3_Init(glsl_version);
+
     // Our state
-    bool show_demo_window = true;
-    bool show_another_window = false;
+    bool show_recording_window = false;
     ImVec4 clear_color = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
 
     // Main loop
@@ -87,32 +118,16 @@ int main(int, char**)
                 //// Next button on the same horizontal line.
                 ImGui::SameLine();
 
-                ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f)); // 50% transparent background
-                if (ImGui::BeginPopup("TransparentPopup", ImGuiWindowFlags_AlwaysAutoResize))
+                if (show_recording_window && ImGui::Begin("Record...", 0, ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMouseInputs | ImGuiWindowFlags_NoInputs))
                 {
-                    // Option 1: Push a style color override for the window background.
-                    // The fourth parameter is the alpha (transparency) value, where 0.0 is fully transparent.
-
-                    // Optionally, you can disable the window decorations if needed.
-
-                    // Create the window as a popup with the adjusted flags.
-                    if (ImGui::BeginChild("PopupContent", ImVec2(300, 100)))
-                    {
-                        ImGui::Text("Set Recording area...");
-                        // Additional UI elements here...
-                    }
-                    ImGui::EndChild();
-
-                    ImGui::EndPopup();
+                    ImGui::GetWindowViewport()->Flags |= ImGuiViewportFlags_TopMost;
+                    ImGui::End();
                 }
 
-                // Pop the style override for the window background.
-                ImGui::PopStyleColor();
-
                 // Trigger or open the popup (for example, on a button click)
-                if (ImGui::Button("Open Transparent Popup"))
+                if (ImGui::Button("Set Recording area..."))
                 {
-                    ImGui::OpenPopup("TransparentPopup");
+                    show_recording_window = !show_recording_window;
                 }
 
                 //// Icon Button 2
@@ -129,9 +144,8 @@ int main(int, char**)
             // Child 1: no border, enable horizontal scrollbar
             {
                 ImGuiWindowFlags window_flags = ImGuiWindowFlags_HorizontalScrollbar;
-                ImGui::BeginChild("ChildL", ImVec2(ImGui::GetContentRegionAvail().x * 0.5f, ImGui::GetContentRegionAvail().y), ImGuiChildFlags_Borders, window_flags);
-                for (int i = 0; i < 100; i++)
-                    ImGui::Text("%04d: scrollable region", i);
+                ImGui::BeginChild("Test Steps", ImVec2(ImGui::GetContentRegionAvail().x * 0.5f, ImGui::GetContentRegionAvail().y), ImGuiChildFlags_Borders, window_flags);
+                ImGui::Text("Test Item #1");
                 ImGui::EndChild();
             }
 
@@ -140,18 +154,8 @@ int main(int, char**)
             // Child 2: rounded border
             {
                 ImGuiWindowFlags window_flags = ImGuiWindowFlags_None;
-                ImGui::BeginChild("ChildR", ImVec2(0, ImGui::GetContentRegionAvail().y), ImGuiChildFlags_Borders, window_flags);
-                if (ImGui::BeginTable("split", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_NoSavedSettings))
-                {
-                    for (int i = 0; i < 100; i++)
-                    {
-                        char buf[32];
-                        sprintf(buf, "%03d", i);
-                        ImGui::TableNextColumn();
-                        ImGui::Button(buf, ImVec2(-FLT_MIN, 0.0f));
-                    }
-                    ImGui::EndTable();
-                }
+                ImGui::BeginChild("Preview", ImVec2(0, ImGui::GetContentRegionAvail().y), ImGuiChildFlags_Borders, window_flags);
+                ImGui::Text("Property #1");
                 ImGui::EndChild();
             }
         }
@@ -159,15 +163,25 @@ int main(int, char**)
 
         // Rendering
         ImGui::Render();
+
         int display_w, display_h;
         glfwGetFramebufferSize(window, &display_w, &display_h);
         glViewport(0, 0, display_w, display_h);
-        glClearColor(clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w);
+        glClearColor(clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, 0.0);
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
+        if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+        {
+            GLFWwindow* backup_current_context = glfwGetCurrentContext();
+            ImGui::UpdatePlatformWindows();
+            ImGui::RenderPlatformWindowsDefault();
+            glfwMakeContextCurrent(backup_current_context);
+        }
+
         glfwSwapBuffers(window);
     }
+
 
     // Cleanup
     ImGui_ImplOpenGL3_Shutdown();
