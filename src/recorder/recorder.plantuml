@@ -1,0 +1,47 @@
+@startuml recorder
+title Template Method pattern for Window Interaction
+
+struct WindowInfo {
+  + processName: string
+  + handle: void*
+}
+
+struct ContextEvent {
+  type: EventType
+}
+
+enum MouseButton {
+  LMOUSE
+  RMOUSE
+}
+
+struct MouseEvent extends ContextEvent {
+  pos: Vec2
+  mouseButton: MouseButton
+}
+
+struct KeyboardEvent extends ContextEvent {
+  keyCode: string
+  keyPressState: KeyPressState
+}
+
+enum EventType {
+  MOUSE
+  KEYBOARD
+}
+
+class ContextObserver {
+  - handle
+  + ContextObserver(handle = NULL)
+  + subscribe(eventType, callback)
+}
+
+class WIN32ContextObserver extends ContextObserver {
+  + 
+}
+
+class X11ContextObserver extends ContextObserver {
+  + 
+}
+
+Client -right-* ContextObserver

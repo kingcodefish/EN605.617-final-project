@@ -1,12 +1,16 @@
 project(recorder)
 
-add_executable(${PROJECT_NAME} main.cpp)
+add_executable(${PROJECT_NAME}
+    main.cpp
+    ContextObserver.h
+    backends/Win32ContextObserver.h
+    backends/Win32ContextObserver.cpp
+)
 
-# target_include_directories(${PROJECT_NAME}
-#     PUBLIC
-#     ${EXTERNAL_DIR}
-#     ${EXTERNAL_DIR}/imgui
-# )
+target_include_directories(${PROJECT_NAME}
+    PUBLIC
+    ${CMAKE_CURRENT_LIST_DIR}
+)
 
 target_link_libraries(${PROJECT_NAME}
     PUBLIC
