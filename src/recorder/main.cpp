@@ -9,6 +9,7 @@
 
 #ifdef WIN32
 #include <windows.h>
+#include <backends/Win32ContextObserver.h>
 #endif
 
 static void glfw_error_callback(int error, const char* description)
@@ -16,8 +17,9 @@ static void glfw_error_callback(int error, const char* description)
     fprintf(stderr, "GLFW Error %d: %s\n", error, description);
 }
 
-HHOOK mouseHook;
-HWND highlightedHwnd = NULL; // Store the currently highlighted window
+static HHOOK mouseHook;
+static std::unique_ptr<recorder::ContextObserver> observer;
+static std::atomic<HWND> highlightedHwnd = NULL; // Store the currently highlighted window
 
 // Get the horizontal and vertical screen sizes in pixel
 inline POINT get_window_resolution(const HWND window_handle)
@@ -231,6 +233,7 @@ int main(int, char**)
     // Our state
     bool show_recording_window = false;
     bool recording = false;
+    std::atomic<bool> selecting = false;
     ImVec4 clear_color = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
 
     // Main loop
@@ -291,44 +294,42 @@ int main(int, char**)
                 ImGui::PushStyleColor(ImGuiCol_HeaderActive, (ImVec4)ImColor(130, 0, 0));
                 if (ImGui::Selectable("Record", &recording, !highlightedHwnd ? ImGuiSelectableFlags_Disabled : 0, ImVec2(50, 20)))
                 {
-                    HHOOK mouseHook = SetWindowsHookEx(WH_MOUSE_LL, RecordingProc, NULL, 0);
-                    if (!mouseHook) {
-                        std::cerr << "Failed to set mouse hook!" << std::endl;
-                        return -1;
-                    }
-
-                    // Message loop
-                    MSG msg;
-                    while (GetMessage(&msg, NULL, 0, 0)) {
-                        TranslateMessage(&msg);
-                        DispatchMessage(&msg);
-                    }
-
-                    // Unhook the mouse hook
-                    UnhookWindowsHookEx(mouseHook);
                 }
                 ImGui::PopStyleColor(3);
 
                 ImGui::SameLine();
 
-                if (ImGui::Button("Select Application"))
+                if (ImGui::Button("Select Application") && !selecting)
                 {
+                    selecting = true;
                     highlightedHwnd = NULL;
-                    HHOOK mouseHook = SetWindowsHookEx(WH_MOUSE_LL, MouseHookProc, NULL, 0);
-                    if (!mouseHook) {
-                        std::cerr << "Failed to set mouse hook!" << std::endl;
-                        return -1;
-                    }
 
-                    // Message loop
-                    MSG msg;
-                    while (highlightedHwnd == NULL && GetMessage(&msg, NULL, 0, 0)) {
-                        TranslateMessage(&msg);
-                        DispatchMessage(&msg);
+                    // Pick observer based on platform
+#ifdef WIN32
+                    if (!observer)
+                    {
+                        observer = std::make_unique<recorder::Win32ContextObserver>(nullptr);
                     }
+#else
+                    // TODO: X11-based observer
+#endif
 
-                    // Unhook the mouse hook
-                    UnhookWindowsHookEx(mouseHook);
+                    auto callback = [&](recorder::ContextEvent* ev) -> bool {
+                        if (ev->type == recorder::EventType::MOUSE)
+                        {
+                            auto asMouseEvent = dynamic_cast<recorder::MouseEvent*>(ev);
+                            if (asMouseEvent->mouseBtn == recorder::MouseButton::LBUTTON)
+                            {
+                                std::cout << "HWND: " << asMouseEvent->handle << std::endl;
+                                highlightedHwnd = static_cast<HWND>(asMouseEvent->handle);
+                                selecting = false;
+                                return true;
+                            }
+                        }
+                        return false;
+                        };
+
+                    observer->subscribe(recorder::EventType::MOUSE, callback);
                 }
 
                 ImGui::PopStyleVar(); // Restore item spacing

@@ -20,10 +20,9 @@ namespace recorder
         virtual ~Win32ContextObserver();
 
         virtual void subscribe(EventType eventType,
-            std::function<void(ContextEvent)> callback) override;
+            std::function<bool(ContextEvent*)> callback) override;
     private:
         HWND* m_handle;
-        std::thread m_thread;
         std::vector<HHOOK*> m_hooks;
     };
 }

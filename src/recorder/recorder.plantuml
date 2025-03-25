@@ -30,7 +30,7 @@ enum EventType {
   KEYBOARD
 }
 
-class ContextObserver {
+abstract class ContextObserver {
   - handle
   + ContextObserver(handle = NULL)
   + subscribe(eventType, callback)

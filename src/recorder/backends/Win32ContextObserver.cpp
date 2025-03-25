@@ -8,10 +8,11 @@ namespace recorder
     {
         EventType eventType;
         HWND handle;
-        std::function<void(ContextEvent)> callback;
+        std::function<bool(ContextEvent*)> callback;
     };
 
     static std::vector<InternalCallback> callbacks;
+    static HHOOK dispatchHook = nullptr;
 
     LRESULT CALLBACK dispatchCallback(int nCode, WPARAM wParam, LPARAM lParam)
     {
@@ -32,31 +33,34 @@ namespace recorder
                     if (GetParent(hwnd))
                         hwnd = GetParent(hwnd);
 
-                    for (auto& callback : callbacks)
+                    for (auto callbackItr = callbacks.begin();
+                        callbackItr != callbacks.end();)
                     {
-                        if (callback.eventType == EventType::MOUSE &&
-                            (callback.handle == nullptr || callback.handle == hwnd))
+                        if (callbackItr->eventType == EventType::MOUSE &&
+                            (callbackItr->handle == nullptr || callbackItr->handle == hwnd))
                         {
-                            callback.callback({ EventType::MOUSE });
+                            MouseEvent ev;
+                            ev.type = EventType::MOUSE;
+                            ev.handle = (void*)hwnd;
+                            ev.mouseBtn = MouseButton::LBUTTON;
+
+                            // If the callback "handles" this event, then we
+                            // should erase the iterator.
+                            if (callbackItr->callback(&ev))
+                            {
+                                callbackItr = callbacks.erase(callbackItr);
+                            }
+                            else
+                            {
+                                callbackItr++;
+                            }
                         }
                     }
-                    std::cout << "Clicked window HWND: " << hwnd << std::endl;
                 }
             }
         }
 
-        // TODO: Fix nullptr here --- needs to know current HHOOK
-        return CallNextHookEx(nullptr, nCode, wParam, lParam);
-    }
-
-    void messageLoop()
-    {
-        MSG msg;
-        while (GetMessage(&msg, NULL, 0, 0))
-        {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-        }
+        return CallNextHookEx(dispatchHook, nCode, wParam, lParam);
     }
 
     Win32ContextObserver::Win32ContextObserver(void* handle)
@@ -70,8 +74,6 @@ namespace recorder
 
     Win32ContextObserver::~Win32ContextObserver()
     {
-        m_thread.join();
-
         for (auto&& hook : m_hooks)
         {
             UnhookWindowsHookEx(*hook);
@@ -79,9 +81,13 @@ namespace recorder
     }
 
     void Win32ContextObserver::subscribe(EventType eventType,
-        std::function<void(ContextEvent)> callback)
+        std::function<bool(ContextEvent*)> callback)
     {
-        HHOOK dispatchHook = SetWindowsHookEx(WH_MOUSE_LL, dispatchCallback, NULL, 0);
+        if (!dispatchHook)
+        {
+            dispatchHook = SetWindowsHookEx(WH_MOUSE_LL, dispatchCallback, NULL, 0);
+        }
+
         if (!dispatchHook)
         {
             std::cerr << "Failed to set hook on event type! " << std::endl;
@@ -89,10 +95,6 @@ namespace recorder
         }
 
         m_hooks.push_back(&dispatchHook);
-        
-        if (!m_thread.joinable())
-        {
-            m_thread = std::thread(messageLoop);
-        }
+        callbacks.push_back({ eventType, nullptr, callback });
     }
 }
