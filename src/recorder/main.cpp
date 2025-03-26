@@ -166,7 +166,8 @@ int main(int, char**)
     if (window == nullptr)
         return 1;
     glfwMakeContextCurrent(window);
-    glfwSwapInterval(1); // Enable vsync
+    glfwSwapInterval(0); // Disable vsync --- this messes with event processing
+                         // due to the length of time for glfwSwapBuffers
 
     // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
@@ -192,12 +193,6 @@ int main(int, char**)
     // Main loop
     while (!glfwWindowShouldClose(window))
     {
-        if (GetMessage(&msg, NULL, 0, 0))
-        {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-        }
-
         glfwPollEvents();
         if (glfwGetWindowAttrib(window, GLFW_ICONIFIED) != 0)
         {
@@ -284,7 +279,7 @@ int main(int, char**)
 
                 ImGui::SameLine();
 
-                if (ImGui::Button("Select Application") && !selecting)
+                if (/*ImGui::Button("Select Application") && */!selecting)
                 {
                     selecting = true;
                     highlightedHwnd = NULL;
