@@ -273,7 +273,7 @@ int main(int, char**)
                             auto asKeyboardEvent = dynamic_cast<recorder::KeyboardEvent*>(ev);
                             if (asKeyboardEvent)
                             {
-                                std::cout << "Keyboard event: " << asKeyboardEvent->keyCode << std::endl;
+                                std::cout << "Keyboard event: " << (char)asKeyboardEvent->keyCode << std::endl;
                             }
                         }
                         return false;
