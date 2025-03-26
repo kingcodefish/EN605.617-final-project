@@ -33,7 +33,7 @@ namespace recorder
 
     struct KeyboardEvent : public ContextEvent
     {
-        
+        int keyCode;
     };
 
     class ContextObserver

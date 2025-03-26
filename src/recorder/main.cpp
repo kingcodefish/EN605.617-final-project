@@ -148,8 +148,6 @@ inline bool capture_screen_client_window(const HWND window_handle, const ImVec2 
 // Main code
 int main(int, char**)
 {
-    MSG msg;
-
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit())
         return 1;
@@ -270,6 +268,14 @@ int main(int, char**)
                                 capture_screen_client_window((HWND)asMouseEvent->handle, asMouseEvent->mousePos, "C:\\My_Work\\test.bmp");
                             }
                         }
+                        else if (ev->type == recorder::EventType::KEYBOARD)
+                        {
+                            auto asKeyboardEvent = dynamic_cast<recorder::KeyboardEvent*>(ev);
+                            if (asKeyboardEvent)
+                            {
+                                std::cout << "Keyboard event: " << asKeyboardEvent->keyCode << std::endl;
+                            }
+                        }
                         return false;
                         };
 
@@ -279,7 +285,7 @@ int main(int, char**)
 
                 ImGui::SameLine();
 
-                if (/*ImGui::Button("Select Application") && */!selecting)
+                if (ImGui::Button("Select Application") && !selecting)
                 {
                     selecting = true;
                     highlightedHwnd = NULL;

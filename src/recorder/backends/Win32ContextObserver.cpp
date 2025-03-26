@@ -56,6 +56,47 @@ namespace recorder
                                 callbackItr++;
                             }
                         }
+                        else
+                        {
+                            callbackItr++;
+                        }
+                    }
+                }
+            }
+            else if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN)
+            {
+                KBDLLHOOKSTRUCT* pKeyStruct = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
+
+                // Translate virtual key to character
+                BYTE keyboardState[256];
+                GetKeyboardState(keyboardState);
+
+                char buffer[2];
+                if (ToAscii(pKeyStruct->vkCode, pKeyStruct->scanCode, keyboardState, (LPWORD)buffer, 0) == 1) {
+                    for (auto callbackItr = callbacks.begin();
+                        callbackItr != callbacks.end();)
+                    {
+                        //if (callbackItr->eventType == EventType::KEYBOARD)
+                        //{
+                        KeyboardEvent ev;
+                        ev.type = EventType::KEYBOARD;
+                        ev.keyCode = static_cast<int>(buffer[0]);
+
+                        // If the callback "handles" this event, then we
+                        // should erase the iterator.
+                        if (callbackItr->callback(&ev))
+                        {
+                            callbackItr = callbacks.erase(callbackItr);
+                        }
+                        else
+                        {
+                            callbackItr++;
+                        }
+                        //}
+                        //else
+                        //{
+                        //    callbackItr++;
+                        //}
                     }
                 }
             }
@@ -84,7 +125,7 @@ namespace recorder
         if (!dispatchHook)
         {
             dispatchHook = SetWindowsHookEx(WH_MOUSE_LL, dispatchCallback, NULL, 0);
-            //dispatchHook = SetWindowsHookEx(WH_KEYBOARD_LL, dispatchCallback, NULL, 0);
+            dispatchHook = SetWindowsHookEx(WH_KEYBOARD_LL, dispatchCallback, NULL, 0);
         }
 
         if (!dispatchHook)
