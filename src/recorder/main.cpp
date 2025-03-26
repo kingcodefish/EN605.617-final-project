@@ -19,6 +19,7 @@ static void glfw_error_callback(int error, const char* description)
 
 static HHOOK mouseHook;
 static std::unique_ptr<recorder::ContextObserver> observer;
+static std::unique_ptr<recorder::ContextObserver> recordObserver;
 static std::atomic<HWND> highlightedHwnd = NULL; // Store the currently highlighted window
 
 // Get the horizontal and vertical screen sizes in pixel
@@ -105,11 +106,11 @@ inline POINT get_client_window_position(const HWND window_handle)
 }
 
 // https://stackoverflow.com/a/9525788/3764804
-inline bool capture_screen_client_window(const HWND window_handle, const POINT mouse_pos, const LPCSTR file_path)
+inline bool capture_screen_client_window(const HWND window_handle, const ImVec2 mouse_pos, const LPCSTR file_path)
 {
     SetActiveWindow(window_handle);
 
-    const auto hdc_source = GetDC(window_handle);
+    const auto hdc_source = GetDC(nullptr);
     const auto hdc_memory = CreateCompatibleDC(hdc_source);
 
     const auto window_resolution = get_window_resolution(window_handle);
@@ -144,59 +145,11 @@ inline bool capture_screen_client_window(const HWND window_handle, const POINT m
     return false;
 }
 
-LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
-    if (nCode == HC_ACTION) {
-        if (wParam == WM_LBUTTONDOWN) {
-            // Get the mouse position
-            MSLLHOOKSTRUCT* pMouseStruct = (MSLLHOOKSTRUCT*)lParam;
-            POINT pt = pMouseStruct->pt;
-
-            // Get the HWND of the window under the mouse cursor
-            HWND hwnd = WindowFromPoint(pt);
-            if (hwnd) {
-                // The hwnd might not represent the full application, see if there
-                // is a common ancestor first
-                if (GetParent(hwnd))
-                    hwnd = GetParent(hwnd);
-                std::cout << "Clicked window HWND: " << hwnd << std::endl;
-                highlightedHwnd = hwnd;
-            }
-        }
-    }
-    return CallNextHookEx(mouseHook, nCode, wParam, lParam);
-}
-
-LRESULT CALLBACK RecordingProc(int nCode, WPARAM wParam, LPARAM lParam) {
-    if (nCode == HC_ACTION) {
-        MSLLHOOKSTRUCT* pMouseStruct = (MSLLHOOKSTRUCT*)lParam;
-        POINT pt = pMouseStruct->pt;
-
-        // Get the HWND of the window under the mouse cursor
-        HWND hwnd = WindowFromPoint(pt);
-        if (hwnd)
-        {
-            // The hwnd might not represent the full application, see if there
-            // is a common ancestor first
-            if (GetParent(hwnd))
-                hwnd = GetParent(hwnd);
-
-            if (hwnd && highlightedHwnd && hwnd == highlightedHwnd) {
-                if (wParam == WM_LBUTTONDOWN) {
-                    std::cout << "Click occurred at (" << pt.x << ", " << pt.y << ")" << std::endl;
-
-                    //auto bitmap = CaptureWindow(hwnd);
-                    //SaveBitmapToFile(bitmap, "C:\\My_Work\\test.bmp");
-                    capture_screen_client_window(hwnd, pt, "C:\\My_Work\\test.bmp");
-                }
-            }
-        }
-    }
-    return CallNextHookEx(mouseHook, nCode, wParam, lParam);
-}
-
 // Main code
 int main(int, char**)
 {
+    MSG msg;
+
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit())
         return 1;
@@ -239,6 +192,12 @@ int main(int, char**)
     // Main loop
     while (!glfwWindowShouldClose(window))
     {
+        if (GetMessage(&msg, NULL, 0, 0))
+        {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+
         glfwPollEvents();
         if (glfwGetWindowAttrib(window, GLFW_ICONIFIED) != 0)
         {
@@ -292,8 +251,34 @@ int main(int, char**)
                 ImGui::PushStyleColor(ImGuiCol_Header, (ImVec4)ImColor(150, 0, 0));
                 ImGui::PushStyleColor(ImGuiCol_HeaderHovered, (ImVec4)ImColor(100, 0, 0));
                 ImGui::PushStyleColor(ImGuiCol_HeaderActive, (ImVec4)ImColor(130, 0, 0));
-                if (ImGui::Selectable("Record", &recording, !highlightedHwnd ? ImGuiSelectableFlags_Disabled : 0, ImVec2(50, 20)))
+                if (ImGui::Selectable("Record", &recording, !highlightedHwnd ? ImGuiSelectableFlags_Disabled : 0, ImVec2(50, 20)) && !recording)
                 {
+                    recording = true;
+
+                    // Pick observer based on platform
+#ifdef WIN32
+                    if (!recordObserver)
+                    {
+                        recordObserver = std::make_unique<recorder::Win32ContextObserver>(highlightedHwnd);
+                    }
+#else
+                    // TODO: X11-based observer
+#endif
+
+                    auto callback = [&](recorder::ContextEvent* ev) -> bool {
+                        if (ev->type == recorder::EventType::MOUSE)
+                        {
+                            auto asMouseEvent = dynamic_cast<recorder::MouseEvent*>(ev);
+                            if (asMouseEvent->mouseBtn == recorder::MouseButton::LBUTTON)
+                            {
+                                std::cout << "Click occurred at (" << asMouseEvent->mousePos.x << ", " << asMouseEvent->mousePos.y << ")" << std::endl;
+                                capture_screen_client_window((HWND)asMouseEvent->handle, asMouseEvent->mousePos, "C:\\My_Work\\test.bmp");
+                            }
+                        }
+                        return false;
+                        };
+
+                    recordObserver->subscribe(recorder::EventType::MOUSE, callback);
                 }
                 ImGui::PopStyleColor(3);
 

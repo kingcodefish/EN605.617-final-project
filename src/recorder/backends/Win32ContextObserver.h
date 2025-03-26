@@ -22,8 +22,7 @@ namespace recorder
         virtual void subscribe(EventType eventType,
             std::function<bool(ContextEvent*)> callback) override;
     private:
-        HWND* m_handle;
-        std::vector<HHOOK*> m_hooks;
+        HWND m_handle;
     };
 }
 

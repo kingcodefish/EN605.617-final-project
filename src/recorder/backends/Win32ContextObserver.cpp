@@ -43,6 +43,7 @@ namespace recorder
                             ev.type = EventType::MOUSE;
                             ev.handle = (void*)hwnd;
                             ev.mouseBtn = MouseButton::LBUTTON;
+                            ev.mousePos = ImVec2(pt.x, pt.y);
 
                             // If the callback "handles" this event, then we
                             // should erase the iterator.
@@ -68,16 +69,13 @@ namespace recorder
     {
         if (handle)
         {
-            m_handle = static_cast<HWND*>(handle);
+            m_handle = static_cast<HWND>(handle);
         }
     }
 
     Win32ContextObserver::~Win32ContextObserver()
     {
-        for (auto&& hook : m_hooks)
-        {
-            UnhookWindowsHookEx(*hook);
-        }
+        UnhookWindowsHookEx(dispatchHook);
     }
 
     void Win32ContextObserver::subscribe(EventType eventType,
@@ -86,6 +84,7 @@ namespace recorder
         if (!dispatchHook)
         {
             dispatchHook = SetWindowsHookEx(WH_MOUSE_LL, dispatchCallback, NULL, 0);
+            //dispatchHook = SetWindowsHookEx(WH_KEYBOARD_LL, dispatchCallback, NULL, 0);
         }
 
         if (!dispatchHook)
@@ -93,8 +92,6 @@ namespace recorder
             std::cerr << "Failed to set hook on event type! " << std::endl;
             return;
         }
-
-        m_hooks.push_back(&dispatchHook);
-        callbacks.push_back({ eventType, nullptr, callback });
+        callbacks.push_back({ eventType, m_handle, callback });
     }
 }
