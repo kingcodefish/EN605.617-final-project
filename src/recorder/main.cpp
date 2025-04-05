@@ -7,6 +7,7 @@
 
 #include <iostream>
 
+#define NOMINMAX
 #ifdef WIN32
 #include <windows.h>
 #include <backends/Win32ContextObserver.h>
@@ -17,10 +18,20 @@ static void glfw_error_callback(int error, const char* description)
     fprintf(stderr, "GLFW Error %d: %s\n", error, description);
 }
 
+struct Event
+{
+    std::string type;
+    std::string data;
+    GLuint image; // texture ID of iamge
+    int width;
+    int height;
+};
+
 static HHOOK mouseHook;
 static std::unique_ptr<recorder::ContextObserver> observer;
 static std::unique_ptr<recorder::ContextObserver> recordObserver;
 static std::atomic<HWND> highlightedHwnd = NULL; // Store the currently highlighted window
+static std::vector<Event> events;
 
 // Get the horizontal and vertical screen sizes in pixel
 inline POINT get_window_resolution(const HWND window_handle)
@@ -105,8 +116,77 @@ inline POINT get_client_window_position(const HWND window_handle)
     return coordinates;
 }
 
+GLuint LoadHBITMAPToTexture(HBITMAP hBitmap) {
+    BITMAP bmp;
+    GetObject(hBitmap, sizeof(BITMAP), &bmp);
+
+    int width = bmp.bmWidth;
+    int height = bmp.bmHeight;
+
+    // Create a device-independent bitmap section (DIB)
+    BITMAPINFO bmi;
+    ZeroMemory(&bmi, sizeof(bmi));
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = width;
+    bmi.bmiHeader.biHeight = -height; // negative to flip vertically for OpenGL
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    // Allocate space for the pixel data
+    void* pixels = nullptr;
+    HDC hdc = GetDC(NULL);
+    HDC memDC = CreateCompatibleDC(hdc);
+    HBITMAP hDIB = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &pixels, NULL, 0);
+    HGDIOBJ oldBitmap = SelectObject(memDC, hDIB);
+
+    // Blit original bitmap to DIB section to get pixel data
+    HDC srcDC = CreateCompatibleDC(hdc);
+    SelectObject(srcDC, hBitmap);
+    BitBlt(memDC, 0, 0, width, height, srcDC, 0, 0, SRCCOPY);
+
+    // Force alpha to 255 -- otherwise mouse click shows as a black circle
+    for (int y = 0; y < height; ++y) {
+        uint8_t* row = reinterpret_cast<uint8_t*>(pixels) + y * width * 4;
+        for (int x = 0; x < width; ++x) {
+            row[x * 4 + 3] = 255; // A = 255
+        }
+    }
+
+    // Now we have pixel data in `pixels` (BGRA format)
+    GLuint textureID;
+    glGenTextures(1, &textureID);
+    glBindTexture(GL_TEXTURE_2D, textureID);
+
+    // Set texture parameters (adjust as needed)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    // Upload texture to GPU
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGBA,
+        width,
+        height,
+        0,
+        GL_BGRA_EXT,  // BGRA matches the DIB section format
+        GL_UNSIGNED_BYTE,
+        pixels
+    );
+
+    // Clean up
+    SelectObject(memDC, oldBitmap);
+    DeleteDC(memDC);
+    DeleteDC(srcDC);
+    DeleteObject(hDIB);
+    ReleaseDC(NULL, hdc);
+
+    return textureID;
+}
+
 // https://stackoverflow.com/a/9525788/3764804
-inline bool capture_screen_client_window(const HWND window_handle, const ImVec2 mouse_pos, const LPCSTR file_path)
+inline void capture_screen_client_window(const HWND window_handle, const ImVec2* mouse_pos, const std::string& message)
 {
     SetActiveWindow(window_handle);
 
@@ -121,28 +201,37 @@ inline bool capture_screen_client_window(const HWND window_handle, const ImVec2 
     const auto client_window_position = get_client_window_position(window_handle);
 
     auto h_bitmap = CreateCompatibleBitmap(hdc_source, width, height);
-    const auto h_bitmap_old = static_cast<HBITMAP>(SelectObject(hdc_memory, h_bitmap));
+
+    h_bitmap = static_cast<HBITMAP>(SelectObject(hdc_memory, h_bitmap));
 
     BitBlt(hdc_memory, 0, 0, width, height, hdc_source, client_window_position.x, client_window_position.y, SRCCOPY);
 
-    POINT mouseRelative = { mouse_pos.x - client_window_position.x, mouse_pos.y - client_window_position.y };
-    HBRUSH hBlueBrush = CreateSolidBrush(RGB(255, 0, 0));
-    SelectObject(hdc_memory, hBlueBrush);
-    Ellipse(hdc_memory, mouseRelative.x - 10, mouseRelative.y - 10, mouseRelative.x + 10, mouseRelative.y + 10);
-    DeleteObject(hBlueBrush);
+    Event e;
+    if (mouse_pos)
+    {
+        e.type = "Mouse";
 
-    h_bitmap = static_cast<HBITMAP>(SelectObject(hdc_memory, h_bitmap_old));
+        POINT mouseRelative = { mouse_pos->x - client_window_position.x, mouse_pos->y - client_window_position.y };
+        HBRUSH hRedBrush = CreateSolidBrush(RGB(255, 0, 0));
+        SelectObject(hdc_memory, hRedBrush);
+        Ellipse(hdc_memory, mouseRelative.x - 10, mouseRelative.y - 10, mouseRelative.x + 10, mouseRelative.y + 10);
+        DeleteObject(hRedBrush);
+    }
+    else
+    {
+        e.type = "Keyboard";
+    }
+
+    h_bitmap = static_cast<HBITMAP>(SelectObject(hdc_memory, h_bitmap));
 
     DeleteDC(hdc_source);
     DeleteDC(hdc_memory);
 
-    const HPALETTE h_palette = nullptr;
-    if (save_bitmap(file_path, h_bitmap, h_palette))
-    {
-        return true;
-    }
-
-    return false;
+    e.data = message;
+    e.image = LoadHBITMAPToTexture(h_bitmap);
+    e.width = width;
+    e.height = height;
+    events.push_back(e);
 }
 
 // Main code
@@ -186,6 +275,7 @@ int main(int, char**)
     bool show_recording_window = false;
     bool recording = false;
     std::atomic<bool> selecting = false;
+    int selectedTestStep = -1;
     ImVec4 clear_color = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
 
     // Main loop
@@ -238,13 +328,20 @@ int main(int, char**)
                 ImGui::BeginChild("Toolbar", ImVec2(0, iconSize), false,
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
+                auto style = ImGui::GetStyle();
+
                 // Optionally change spacing between buttons.
                 ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 4));
+                ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, style.ButtonTextAlign);
 
                 ImGui::PushStyleColor(ImGuiCol_Header, (ImVec4)ImColor(150, 0, 0));
                 ImGui::PushStyleColor(ImGuiCol_HeaderHovered, (ImVec4)ImColor(100, 0, 0));
                 ImGui::PushStyleColor(ImGuiCol_HeaderActive, (ImVec4)ImColor(130, 0, 0));
-                if (ImGui::Selectable("Record", &recording, !highlightedHwnd ? ImGuiSelectableFlags_Disabled : 0, ImVec2(50, 20)) && !recording)
+
+                ImVec2 recordBtnSize = ImGui::CalcTextSize("Record");
+                recordBtnSize.x += style.FramePadding.x * 2.0;
+                recordBtnSize.y += style.FramePadding.y * 2.0;
+                if (ImGui::Selectable("Record", &recording, !highlightedHwnd ? ImGuiSelectableFlags_Disabled : 0, recordBtnSize) && !recording)
                 {
                     recording = true;
 
@@ -258,30 +355,32 @@ int main(int, char**)
                     // TODO: X11-based observer
 #endif
 
-                    auto callback = [&](recorder::ContextEvent* ev) -> bool {
-                        if (ev->type == recorder::EventType::MOUSE)
+                    auto mouseCallback = [&](recorder::ContextEvent* ev) -> bool {
+                        auto asMouseEvent = dynamic_cast<recorder::MouseEvent*>(ev);
+                        if (asMouseEvent->mouseBtn == recorder::MouseButton::LBUTTON)
                         {
-                            auto asMouseEvent = dynamic_cast<recorder::MouseEvent*>(ev);
-                            if (asMouseEvent->mouseBtn == recorder::MouseButton::LBUTTON)
-                            {
-                                std::cout << "Click occurred at (" << asMouseEvent->mousePos.x << ", " << asMouseEvent->mousePos.y << ")" << std::endl;
-                                capture_screen_client_window((HWND)asMouseEvent->handle, asMouseEvent->mousePos, "C:\\My_Work\\test.bmp");
-                            }
-                        }
-                        else if (ev->type == recorder::EventType::KEYBOARD)
-                        {
-                            auto asKeyboardEvent = dynamic_cast<recorder::KeyboardEvent*>(ev);
-                            if (asKeyboardEvent)
-                            {
-                                std::cout << "Keyboard event: " << (char)asKeyboardEvent->keyCode << std::endl;
-                            }
+                            std::string message = "(" + std::to_string(asMouseEvent->mousePos.x) + ", " + std::to_string(asMouseEvent->mousePos.y) + ")";
+                            std::cout << "Click occurred at " << message << std::endl;
+                            capture_screen_client_window((HWND)asMouseEvent->handle, &asMouseEvent->mousePos, message);
                         }
                         return false;
                         };
 
-                    recordObserver->subscribe(recorder::EventType::MOUSE, callback);
+                    auto keyboardCallback = [&](recorder::ContextEvent* ev) -> bool {
+                        auto asKeyboardEvent = dynamic_cast<recorder::KeyboardEvent*>(ev);
+                        if (asKeyboardEvent)
+                        {
+                            std::cout << "Keyboard event: " << (char)asKeyboardEvent->keyCode << std::endl;
+                            capture_screen_client_window((HWND)asKeyboardEvent->handle, nullptr, std::string() + (char)asKeyboardEvent->keyCode);
+                        }
+                        return false;
+                        };
+
+                    recordObserver->subscribe(recorder::EventType::MOUSE, mouseCallback);
+                    recordObserver->subscribe(recorder::EventType::KEYBOARD, keyboardCallback);
                 }
                 ImGui::PopStyleColor(3);
+                ImGui::PopStyleVar(); // ImGuiStyleVar_SelectableTextAlign
 
                 ImGui::SameLine();
 
@@ -323,21 +422,34 @@ int main(int, char**)
                 ImGui::EndChild();
             }
 
-            // Child 1: no border, enable horizontal scrollbar
             {
                 ImGuiWindowFlags window_flags = ImGuiWindowFlags_HorizontalScrollbar;
-                ImGui::BeginChild("Test Steps", ImVec2(ImGui::GetContentRegionAvail().x * 0.5f, ImGui::GetContentRegionAvail().y), ImGuiChildFlags_Borders, window_flags);
-                ImGui::Text("Test Item #1");
+                ImGui::BeginChild("Test Steps", ImVec2(ImGui::GetContentRegionAvail().x * 0.25f, ImGui::GetContentRegionAvail().y), ImGuiChildFlags_Borders, window_flags);
+                for (int i = 0; i < events.size(); i++)
+                {
+                    ImGui::PushID((std::string("events-") + std::to_string(i)).c_str());
+                    if (ImGui::Selectable(std::string(events[i].type + " - " + events[i].data).c_str(), i == selectedTestStep))
+                    {
+                        selectedTestStep = i;
+                    }
+                    ImGui::PopID();
+                }
                 ImGui::EndChild();
             }
-
+            
             ImGui::SameLine();
 
-            // Child 2: rounded border
             {
-                ImGuiWindowFlags window_flags = ImGuiWindowFlags_None;
+                ImGuiWindowFlags window_flags = ImGuiWindowFlags_HorizontalScrollbar;
                 ImGui::BeginChild("Preview", ImVec2(0, ImGui::GetContentRegionAvail().y), ImGuiChildFlags_Borders, window_flags);
-                ImGui::Text("Property #1");
+                if (selectedTestStep >= 0 && selectedTestStep < events.size())
+                {
+                    float aspectRatio = std::min(ImGui::GetContentRegionAvail().x / events[selectedTestStep].width,
+                        ImGui::GetContentRegionAvail().y / events[selectedTestStep].height);
+                    int width = aspectRatio * events[selectedTestStep].width;
+                    int height = aspectRatio * events[selectedTestStep].height;
+                    ImGui::Image(events[selectedTestStep].image, ImVec2(width, height));
+                }
                 ImGui::EndChild();
             }
         }

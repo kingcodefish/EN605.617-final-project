@@ -76,27 +76,29 @@ namespace recorder
                     for (auto callbackItr = callbacks.begin();
                         callbackItr != callbacks.end();)
                     {
-                        //if (callbackItr->eventType == EventType::KEYBOARD)
-                        //{
-                        KeyboardEvent ev;
-                        ev.type = EventType::KEYBOARD;
-                        ev.keyCode = static_cast<int>(buffer[0]);
-
-                        // If the callback "handles" this event, then we
-                        // should erase the iterator.
-                        if (callbackItr->callback(&ev))
+                        if (callbackItr->eventType == EventType::KEYBOARD &&
+                            GetForegroundWindow() == callbackItr->handle)
                         {
-                            callbackItr = callbacks.erase(callbackItr);
+                            KeyboardEvent ev;
+                            ev.type = EventType::KEYBOARD;
+                            ev.keyCode = static_cast<int>(buffer[0]);
+                            ev.handle = callbackItr->handle;
+
+                            // If the callback "handles" this event, then we
+                            // should erase the iterator.
+                            if (callbackItr->callback(&ev))
+                            {
+                                callbackItr = callbacks.erase(callbackItr);
+                            }
+                            else
+                            {
+                                callbackItr++;
+                            }
                         }
                         else
                         {
                             callbackItr++;
                         }
-                        //}
-                        //else
-                        //{
-                        //    callbackItr++;
-                        //}
                     }
                 }
             }
