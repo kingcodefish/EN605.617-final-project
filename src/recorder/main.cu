@@ -13,6 +13,9 @@
 #include <backends/Win32ContextObserver.h>
 #endif
 
+#include <cuda/CudaBackend.h>
+#include <cuda_gl_interop.h>
+
 static void glfw_error_callback(int error, const char* description)
 {
     fprintf(stderr, "GLFW Error %d: %s\n", error, description);
@@ -211,7 +214,7 @@ inline void capture_screen_client_window(const HWND window_handle, const ImVec2*
     {
         e.type = "Mouse";
 
-        POINT mouseRelative = { mouse_pos->x - client_window_position.x, mouse_pos->y - client_window_position.y };
+        POINT mouseRelative = { mouse_pos->x, mouse_pos->y };
         HBRUSH hRedBrush = CreateSolidBrush(RGB(255, 0, 0));
         SelectObject(hdc_memory, hRedBrush);
         Ellipse(hdc_memory, mouseRelative.x - 10, mouseRelative.y - 10, mouseRelative.x + 10, mouseRelative.y + 10);
@@ -237,6 +240,9 @@ inline void capture_screen_client_window(const HWND window_handle, const ImVec2*
 // Main code
 int main(int, char**)
 {
+    // Construct CUDA backend image processor
+    std::unique_ptr<ImageProcessor> imgProcessor = std::make_unique<CudaImageProcessor>();
+
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit())
         return 1;
@@ -449,6 +455,17 @@ int main(int, char**)
                     int width = aspectRatio * events[selectedTestStep].width;
                     int height = aspectRatio * events[selectedTestStep].height;
                     ImGui::Image(events[selectedTestStep].image, ImVec2(width, height));
+                    if (ImGui::Button("Sobel Filter"))
+                    {
+                        imgProcessor->setImageData(events[selectedTestStep].image, events[selectedTestStep].width, events[selectedTestStep].height);
+                        imgProcessor->sobelFilter();
+                        //cudaGraphicsResource* cudaResource = nullptr;
+                        //cudaGraphicsGLRegisterImage(&cudaResource,
+                        //    events[selectedTestStep].image,
+                        //    GL_TEXTURE_2D,
+                        //    cudaGraphicsRegisterFlagsSurfaceLoadStore);
+
+                    }
                 }
                 ImGui::EndChild();
             }

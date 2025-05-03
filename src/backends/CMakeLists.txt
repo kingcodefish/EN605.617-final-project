@@ -1,10 +1,11 @@
-project(recorder)
+project(backends)
 
-add_executable(${PROJECT_NAME}
-    main.cu
-    ContextObserver.h
-    backends/Win32ContextObserver.h
-    backends/Win32ContextObserver.cpp
+add_library(${PROJECT_NAME} SHARED
+    backends.h
+    ImageProcessor.h
+    ImageProcessor.cpp
+    cuda/CudaBackend.h
+    cuda/CudaBackend.cu
 )
 
 target_include_directories(${PROJECT_NAME}
@@ -15,9 +16,6 @@ target_include_directories(${PROJECT_NAME}
 target_link_libraries(${PROJECT_NAME}
     PUBLIC
     OpenGL::GL
-    glfw
-    imgui
-    backends
     nppc
     nppif
 )
@@ -28,3 +26,6 @@ set_target_properties(
     PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_ARCHITECTURES native)
+
+# For DLL exports/imports
+target_compile_definitions(${PROJECT_NAME} PRIVATE BACKENDS_EXPORTS)

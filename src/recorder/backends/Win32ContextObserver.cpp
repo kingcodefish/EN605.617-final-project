@@ -39,11 +39,14 @@ namespace recorder
                         if (callbackItr->eventType == EventType::MOUSE &&
                             (callbackItr->handle == nullptr || callbackItr->handle == hwnd))
                         {
+                            RECT rect;
+                            GetWindowRect(hwnd, &rect);
+
                             MouseEvent ev;
                             ev.type = EventType::MOUSE;
                             ev.handle = (void*)hwnd;
                             ev.mouseBtn = MouseButton::LBUTTON;
-                            ev.mousePos = ImVec2(pt.x, pt.y);
+                            ev.mousePos = ImVec2(pt.x - rect.left, pt.y - rect.top);
 
                             // If the callback "handles" this event, then we
                             // should erase the iterator.
