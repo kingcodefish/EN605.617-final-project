@@ -23,6 +23,194 @@ do {                                                                           \
 } while (0)
 
 
+// Code taken from: https://github.com/FolkeV/CUDA_CCL/tree/master
+// at an attempt to patch the connected component labeling algorithm.
+namespace NOT_MY_CODE
+{
+    // ---------- Find the root of a chain ----------
+    __device__ __inline__ unsigned int find_root(unsigned int* labels,
+        unsigned int label)
+    {
+        // Resolve Label
+        unsigned int next = labels[label];
+
+        // Follow chain
+        while (label != next) {
+            // Move to next
+            label = next;
+            next = labels[label];
+        }
+
+        // Return label
+        return(label);
+    }
+
+    // ---------- Label Reduction ----------
+    __device__ __inline__ unsigned int reduction(unsigned int* g_labels,
+        unsigned int label1, unsigned int label2)
+    {
+        // Get next labels
+        unsigned int next1 = (label1 != label2) ? g_labels[label1] : 0;
+        unsigned int next2 = (label1 != label2) ? g_labels[label2] : 0;
+
+        // Find label1
+        while ((label1 != label2) && (label1 != next1))
+        {
+            // Adopt label
+            label1 = next1;
+
+            // Fetch next label
+            next1 = g_labels[label1];
+        }
+
+        // Find label2
+        while ((label1 != label2) && (label2 != next2))
+        {
+            // Adopt label
+            label2 = next2;
+
+            // Fetch next label
+            next2 = g_labels[label2];
+        }
+
+        unsigned int label3;
+        // While Labels are different
+        while (label1 != label2)
+        {
+            // Label 2 should be smallest
+            if (label1 < label2)
+            {
+                // Swap Labels
+                label1 = label1 ^ label2;
+                label2 = label1 ^ label2;
+                label1 = label1 ^ label2;
+            }
+
+            // AtomicMin label1 to label2
+            label3 = atomicMin(&g_labels[label1], label2);
+            label1 = (label1 == label3) ? label2 : label3;
+        }
+
+        // Return label1
+        return(label1);
+    }
+
+    __global__ void init_labels(unsigned int* g_labels, const uint8_t* g_image,
+        const size_t numCols, const size_t numRows)
+    {
+        // Calculate index
+        const unsigned int ix = (blockIdx.x * blockDim.x) + threadIdx.x;
+        const unsigned int iy = (blockIdx.y * blockDim.y) + threadIdx.y;
+
+        // Check Thread Range
+        if ((ix < numCols) && (iy < numRows))
+        {
+            // Fetch five image values
+            const uint8_t pyx = g_image[iy * numCols + ix];
+
+            // Neighbour Connections
+            const bool nym1x = (iy > 0) ? (pyx == g_image[(iy - 1) * numCols + ix]) : false;
+            const bool nyxm1 = (ix > 0) ? (pyx == g_image[(iy)*numCols + ix - 1]) : false;
+            const bool nym1xm1 = ((iy > 0) && (ix > 0)) ? (pyx == g_image[(iy - 1) * numCols + ix - 1]) : false;
+            const bool nym1xp1 = ((iy > 0) && (ix < numCols - 1)) ? (pyx == g_image[(iy - 1) * numCols + ix + 1]) : false;
+
+            // Label
+            unsigned int label;
+
+            // Initialise Label
+            // Label will be chosen in the following order:
+            // NW > N > NE > E > current position
+            label = (nyxm1) ? iy * numCols + ix - 1 : iy * numCols + ix;
+            label = (nym1xp1) ? (iy - 1) * numCols + ix + 1 : label;
+            label = (nym1x) ? (iy - 1) * numCols + ix : label;
+            label = (nym1xm1) ? (iy - 1) * numCols + ix - 1 : label;
+
+            // Write to Global Memory
+            g_labels[iy * numCols + ix] = label;
+        }
+    }
+
+    // Resolve Kernel
+    __global__ void resolve_labels(unsigned int* g_labels,
+        const size_t numCols, const size_t numRows)
+    {
+        // Calculate index
+        const unsigned int id = ((blockIdx.y * blockDim.y) + threadIdx.y) * numCols +
+            ((blockIdx.x * blockDim.x) + threadIdx.x);
+
+        // Check Thread Range
+        if (id < (numRows * numCols))
+        {
+            // Resolve Label
+            g_labels[id] = find_root(g_labels, g_labels[id]);
+        }
+    }
+
+    // Label Reduction
+    __global__ void label_reduction(unsigned int* g_labels, const uint8_t* g_image,
+        const size_t numCols, const size_t numRows)
+    {
+        // Calculate index
+        const unsigned int iy = ((blockIdx.y * blockDim.y) + threadIdx.y);
+        const unsigned int ix = ((blockIdx.x * blockDim.x) + threadIdx.x);
+
+        // Check Thread Range
+        if ((ix < numCols) && (iy < numRows))
+        {
+            // Compare Image Values
+            const uint8_t pyx = g_image[iy * numCols + ix];
+            const bool nym1x = (iy > 0) ? (pyx == g_image[(iy - 1) * numCols + ix]) : false;
+
+            if (!nym1x)
+            {
+                // Neighbouring values
+                const bool nym1xm1 = ((iy > 0) && (ix > 0)) ? (pyx == g_image[(iy - 1) * numCols + ix - 1]) : false;
+                const bool nyxm1 = (ix > 0) ? (pyx == g_image[(iy)*numCols + ix - 1]) : false;
+                const bool nym1xp1 = ((iy > 0) && (ix < numCols - 1)) ? (pyx == g_image[(iy - 1) * numCols + ix + 1]) : false;
+
+                if (nym1xp1)
+                {
+                    // Check Criticals
+                    // There are three cases that need a reduction
+                    if ((nym1xm1 && nyxm1) || (nym1xm1 && !nyxm1))
+                    {
+                        // Get labels
+                        unsigned int label1 = g_labels[(iy)*numCols + ix];
+                        unsigned int label2 = g_labels[(iy - 1) * numCols + ix + 1];
+
+                        // Reduction
+                        reduction(g_labels, label1, label2);
+                    }
+
+                    if (!nym1xm1 && nyxm1)
+                    {
+                        // Get labels
+                        unsigned int label1 = g_labels[(iy)*numCols + ix];
+                        unsigned int label2 = g_labels[(iy)*numCols + ix - 1];
+
+                        // Reduction
+                        reduction(g_labels, label1, label2);
+                    }
+                }
+            }
+        }
+    }
+
+    // Force background to get label zero;
+    __global__ void resolve_background(unsigned int* g_labels, const uint8_t* g_image,
+        const size_t numCols, const size_t numRows)
+    {
+        // Calculate index
+        const unsigned int id = ((blockIdx.y * blockDim.y) + threadIdx.y) * numCols +
+            ((blockIdx.x * blockDim.x) + threadIdx.x);
+
+        if (id < numRows * numCols) {
+            g_labels[id] = (g_image[id] > 0) ? g_labels[id] + 1 : 0;
+        }
+    }
+}
+
+// This was a bad attempt :(
 // =============================================================================
 // CUDA-accessible Union-Find Structure
 // =============================================================================
@@ -107,215 +295,53 @@ do {                                                                           \
 
 // Converts the image to grayscale to make it easier to distinguish connected
 // components of the image.
-__global__ void convertGrayscale(const uint8_t* __restrict__ d_image, uint8_t* __restrict__ d_output, size_t pitch,
-    int m_width, int m_height)
+__global__ void convertGrayscale(const uint8_t* __restrict__ d_image,
+    uint8_t* __restrict__ d_output, int width, int height)
 {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-    if (x < m_width && y < m_height)
+    if (x < width && y < height)
     {
         // RGBA format
-        const uint8_t* inPixel = d_image + y * pitch + x * 4;
+        const size_t pixel = (y * width + x) * sizeof(uint8_t) * 4;
 
         // Calculate gray as a weighted average of RGB
-        uint8_t gray = 0.299 * inPixel[0] + 0.587 * inPixel[1]
-            + 0.114 * inPixel[2];
+        uint8_t gray = 0.299 * d_image[pixel + 0] + 0.587 * d_image[pixel + 1]
+            + 0.114 * d_image[pixel + 2];
 
         // Write results to output buffer
-        uint8_t* outPixel = d_output + y * pitch + x * 4;
-        outPixel[0] = gray;
-        outPixel[1] = gray;
-        outPixel[2] = gray;
-        outPixel[3] = 255;
+        d_output[pixel + 0] = gray;
+        d_output[pixel + 1] = gray;
+        d_output[pixel + 2] = gray;
+        d_output[pixel + 3] = 255;
     }
 }
 
-// Reimplmementation of nppiLabelMarkersUF_8u_C1IR that provides a way of
-// preserving the RGBA format of the image for output.
-//
-// Based on the pseudocode in this paper:
-// https://arxiv.org/pdf/1708.08180
-
-__device__ void findAndUnion(int* labelMap, size_t labelPitch, int aX, int aY, int bX, int bY) {
-    int* rowA = (int*)((char*)labelMap + aY * labelPitch);
-    int* rowB = (int*)((char*)labelMap + bY * labelPitch);
-
-    int rootA = rowA[aX];
-    while (true) {
-        int* row = (int*)((char*)labelMap + (rootA / labelPitch) * labelPitch);
-        int parent = row[rootA % (labelPitch / sizeof(int))];
-        if (parent == rootA) break;
-        rootA = parent;
-    }
-
-    int rootB = rowB[bX];
-    while (true) {
-        int* row = (int*)((char*)labelMap + (rootB / labelPitch) * labelPitch);
-        int parent = row[rootB % (labelPitch / sizeof(int))];
-        if (parent == rootB) break;
-        rootB = parent;
-    }
-
-    if (rootA != rootB) {
-        int* row = (int*)((char*)labelMap + (bY * labelPitch));
-        row[bX] = rootA;
-    }
-}
-
-__global__ void localUFMergeWithCoarseLabelingRGBA_pitched(
-    const uint8_t* __restrict__ I,
-    size_t pitchBytes,
-    int imgWidth,
-    int imgHeight,
-    int* __restrict__ LabelMap,
-    size_t labelPitchBytes)
+__device__ uchar4 labelToColor(unsigned int label)
 {
-    extern __shared__ int shared_mem[];
-    int* label_sm = shared_mem;
-    uint32_t* dBuff_fsm = (uint32_t*)(shared_mem + blockDim.x * blockDim.y);
-
-    int tx = threadIdx.x;
-    int ty = threadIdx.y;
-    int tid = ty * blockDim.x + tx;
-    int gx = blockIdx.x * blockDim.x + tx;
-    int gy = blockIdx.y * blockDim.y + ty;
-
-    if (gx < imgWidth && gy < imgHeight)
-    {
-        // Access pitched input row
-        const uchar4* row = (const uchar4*)((const uint8_t*)I + gy * pitchBytes);
-        int* lblRow = (int*)((char*)LabelMap + gy * labelPitchBytes);
-
-        uchar4 pix = row[gx];
-        uint32_t val = (uint32_t)pix.x |
-            ((uint32_t)pix.y << 8) |
-            ((uint32_t)pix.z << 16) |
-            ((uint32_t)pix.w << 24);
-        dBuff_fsm[tid] = val;
-        label_sm[tid] = tid;
-        __syncthreads();
-
-        if (tx > 0 && dBuff_fsm[tid] == dBuff_fsm[tid - 1])
-            label_sm[tid] = label_sm[tid - 1];
-        __syncthreads();
-
-        if (ty > 0 && dBuff_fsm[tid] == dBuff_fsm[tid - blockDim.x])
-            label_sm[tid] = label_sm[tid - blockDim.x];
-        __syncthreads();
-
-        int temp = tid;
-        while (temp != label_sm[temp]) temp = label_sm[temp];
-        label_sm[tid] = temp;
-        __syncthreads();
-
-        if (tx > 0 && dBuff_fsm[tid] == dBuff_fsm[tid - 1]) {
-            int a = label_sm[tid], b = label_sm[tid - 1];
-            if (a < b) label_sm[b] = a; else label_sm[a] = b;
-        }
-        __syncthreads();
-        if (ty > 0 && dBuff_fsm[tid] == dBuff_fsm[tid - blockDim.x]) {
-            int a = label_sm[tid], b = label_sm[tid - blockDim.x];
-            if (a < b) label_sm[b] = a; else label_sm[a] = b;
-        }
-        __syncthreads();
-
-        int l = label_sm[tid];
-        int root = l;
-        while (root != label_sm[root]) root = label_sm[root];
-        int lx = l % blockDim.x;
-        int ly = l / blockDim.x;
-        int global_label = (blockIdx.x * blockDim.x + lx)
-            + (blockIdx.y * blockDim.y + ly) * imgWidth;
-        lblRow[gx] = global_label;
-    }
-}
-
-__device__ bool pixelsEqualRGBA(const uint8_t* a, const uint8_t* b) {
-    return a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3];
-}
-
-__global__ void connectBoundaries(
-    const uint8_t* image, size_t imagePitch,
-    int* labelMap, size_t labelPitch,
-    int imgWidth, int imgHeight
-) {
-    int x = blockIdx.x * blockDim.x + threadIdx.x;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-
-    if (x >= imgWidth || y >= imgHeight) return;
-
-    // Pointers to current pixel
-    const uint8_t* currentPixel = image + y * imagePitch + x * 4;
-
-    // Check left neighbor
-    if (x > 0 && y < 300) {
-        const uint8_t* leftPixel = image + y * imagePitch + (x - 1) * 4;
-        if (pixelsEqualRGBA(currentPixel, leftPixel)) {
-            findAndUnion(labelMap, labelPitch, x, y, x - 1, y);
-        }
-    }
-
-    // Check top neighbor
-    if (y > 0) {
-        const uint8_t* topPixel = image + (y - 1) * imagePitch + x * 4;
-        if (pixelsEqualRGBA(currentPixel, topPixel)) {
-            findAndUnion(labelMap, labelPitch, x, y, x, y - 1);
-        }
-    }
-}
-
-
-__device__ uchar4 labelToColor(int label) {
     // arbitrary primes for mixing
-    unsigned int x = (unsigned int)label;
-    uint8_t r = (uint8_t)((x * 37u) & 0xFF);
-    uint8_t g = (uint8_t)((x * 57u >> 8) & 0xFF);
-    uint8_t b = (uint8_t)((x * 97u >> 16) & 0xFF);
+    uint8_t r = (uint8_t)((label * 37u) & 0xFF);
+    uint8_t g = (uint8_t)((label * 57u >> 8) & 0xFF);
+    uint8_t b = (uint8_t)((label * 97u >> 16) & 0xFF);
     return make_uchar4(r, g, b, 255u);
 }
 
-__global__ void visualizeLabelMapRGBA_pitched(
-    const int* __restrict__ LabelMap,
-    size_t labelPitchBytes,
-    int width,
-    int height,
+__global__ void labels_to_image(
+    const unsigned int* __restrict__ LabelMap,
     uint8_t* __restrict__ OutImage,
-    size_t outPitchBytes
-)
+    int width,
+    int height)
 {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
-    if (x < width && y < height) {
-        const int* lblRow = (const int*)((const char*)LabelMap + y * labelPitchBytes);
-        uchar4* outRow = (uchar4*)((char*)OutImage + y * outPitchBytes);
-        int lbl = lblRow[x];
-        outRow[x] = labelToColor(lbl);
+    if (x < width && y < height)
+    {
+        size_t pixel = y * width + x;
+        uchar4 outColor = labelToColor(LabelMap[pixel]);
+        ((uchar4*)(OutImage + pixel * sizeof(uint8_t) * 4))[0] = outColor;
     }
 }
-//__global__ void visualizeLabelMapRGBA(
-//    const int* __restrict__ LabelMap,
-//    size_t pitch,
-//    int width,
-//    int height,
-//    uint8_t* __restrict__ OutImage
-//)
-//{
-//    int x = blockIdx.x * blockDim.x + threadIdx.x;
-//    int y = blockIdx.y * blockDim.y + threadIdx.y;
-//    if (x < width && y < height) {
-//        int labelIdx = y * width + x;
-//        int lbl = LabelMap[labelIdx];
-//        uchar4 color = labelToColor(lbl);
-//
-//        // have to account for pitch of image (not accounted in label calc)
-//        int outIdx = y * pitch + x * 4;
-//        OutImage[outIdx] = color.x;
-//        OutImage[outIdx + 1] = color.y;
-//        OutImage[outIdx + 2] = color.z;
-//        OutImage[outIdx + 3] = color.w;
-//    }
-//}
 
 void CudaImageProcessor::processImage()
 {
@@ -342,75 +368,58 @@ void CudaImageProcessor::processImage()
 
     // Allocate device memory for NPP processing
     uint8_t* d_inBuffer;
-    size_t pitch;
-    CUDA_CHECK(cudaMallocPitch(&d_inBuffer, &pitch,
-        m_width * sizeof(uint8_t) * 4, m_height));
+    CUDA_CHECK(cudaMalloc(&d_inBuffer,
+        m_width * sizeof(uint8_t) * 4 * m_height));
 
     uint8_t* d_outBuffer;
-    size_t pitch_dst;
-    CUDA_CHECK(cudaMallocPitch(&d_outBuffer, &pitch_dst,
-        m_width * sizeof(uint8_t) * 4, m_height));
+    CUDA_CHECK(cudaMalloc(&d_outBuffer,
+        m_width * sizeof(uint8_t) * 4 * m_height));
 
     // Copy from surface to device memory (intermediate buffer)
-    CUDA_CHECK(cudaMemcpy2DFromArray(d_inBuffer, pitch, cudaArray, 0, 0,
-        m_width * sizeof(uint8_t) * 4, m_height, cudaMemcpyDeviceToDevice));
+    CUDA_CHECK(cudaMemcpyFromArray(d_inBuffer, cudaArray, 0, 0,
+        m_width * sizeof(uint8_t) * 4 * m_height, cudaMemcpyDeviceToDevice));
+ 
+    size_t mapSize = m_width * m_height * sizeof(unsigned int);
+    unsigned int* d_LabelMap;
+    CUDA_CHECK(cudaMalloc(&d_LabelMap, mapSize));
 
-    // Convert image to grayscale
-    dim3 blockSize(16, 16);
-    dim3 gridSize((m_width + 15) / 16, (m_height + 15) / 16);
-    convertGrayscale<<<gridSize, blockSize>>>(d_inBuffer, d_outBuffer,
-        pitch_dst, m_width, m_height);
-    CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
+    dim3 block(16, 16);
+    dim3 grid((m_width + 15) / 16, (m_height + 15) / 16);
 
-    // Find connected components
-    //ConcurrentUnionFind uf(m_width * m_height);
-    size_t mapSize = m_width * m_height * sizeof(int);
-    int* d_LabelMap;
-    size_t labelPitch;
-    CUDA_CHECK(cudaMallocPitch(&d_LabelMap, &labelPitch,
-        m_width * sizeof(int), m_height));
-    dim3 blockDim(16, 16);
-    dim3 gridDim((m_width + 15) / 16, (m_height + 15) / 16);
-    size_t sharedBytes = (16 * 16) * (sizeof(int) + sizeof(uint32_t));
-    localUFMergeWithCoarseLabelingRGBA_pitched <<<gridDim, blockDim, sharedBytes>>>(d_outBuffer, pitch_dst, m_width, m_height, d_LabelMap, labelPitch);
+    convertGrayscale<<<grid, block>>>(d_inBuffer, d_outBuffer, m_width,
+        m_height);
     CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
 
-    connectBoundaries<<<gridDim, blockDim>>>(d_outBuffer, pitch_dst, d_LabelMap, labelPitch, m_width, m_height);
+    // Initialize labels
+    NOT_MY_CODE::init_labels<<<grid, block>>>(d_LabelMap, d_inBuffer, m_width,
+        m_height);
     CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
 
-    visualizeLabelMapRGBA_pitched<<<gridDim, blockDim>>>(
-        d_LabelMap, labelPitch, m_width, m_height, d_outBuffer, pitch_dst
-    );
+    // Analysis
+    NOT_MY_CODE::resolve_labels<<<grid, block>>>(d_LabelMap, m_width, m_height);
     CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
+
+    // Label Reduction
+    NOT_MY_CODE::label_reduction<<<grid, block>>>(d_LabelMap, d_inBuffer, m_width,
+        m_height);
+    CUDA_CHECK(cudaGetLastError());
+
+    // Analysis
+    NOT_MY_CODE::resolve_labels<<<grid, block>>>(d_LabelMap, m_width, m_height);
+    CUDA_CHECK(cudaGetLastError());
+
+    // Force background to have label zero;
+    NOT_MY_CODE::resolve_background<<<grid, block>>>(d_LabelMap, d_inBuffer,
+        m_width, m_height);
+    CUDA_CHECK(cudaGetLastError());
+
+    labels_to_image<<<grid, block>>>(d_LabelMap, d_outBuffer, m_width,
+        m_height);
+    CUDA_CHECK(cudaGetLastError());
 
     // Copy the result back to the CUDA surface
-    CUDA_CHECK(cudaMemcpy2DToArray(cudaArray, 0, 0, d_outBuffer, pitch_dst,
-        m_width * sizeof(uint8_t) * 4, m_height, cudaMemcpyDeviceToDevice));
-
-    //GLuint textureID;
-    //glGenTextures(1, &textureID);
-    //glBindTexture(GL_TEXTURE_2D, 500);
-
-    //// Set texture parameters (adjust as needed)
-    //glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    //glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-    //// Upload texture to GPU
-    //glTexImage2D(
-    //    GL_TEXTURE_2D,
-    //    0,
-    //    GL_RGBA,
-    //    m_width,
-    //    m_height,
-    //    0,
-    //    GL_BGRA_EXT,  // BGRA matches the DIB section format
-    //    GL_UNSIGNED_BYTE,
-    //    cudaArray
-    //);
+    CUDA_CHECK(cudaMemcpyToArray(cudaArray, 0, 0, d_outBuffer,
+        m_width * sizeof(uint8_t) * 4 * m_height, cudaMemcpyDeviceToDevice));
 
     // Free the temporary buffer
     CUDA_CHECK(cudaFree(d_inBuffer));

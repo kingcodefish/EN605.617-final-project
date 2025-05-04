@@ -347,9 +347,9 @@ int main(int, char**)
                 ImVec2 recordBtnSize = ImGui::CalcTextSize("Record");
                 recordBtnSize.x += style.FramePadding.x * 2.0;
                 recordBtnSize.y += style.FramePadding.y * 2.0;
-                if (ImGui::Selectable("Record", &recording, !highlightedHwnd ? ImGuiSelectableFlags_Disabled : 0, recordBtnSize) && !recording)
+                if (ImGui::Selectable("Record", &recording, !highlightedHwnd ? ImGuiSelectableFlags_Disabled : 0, recordBtnSize))
                 {
-                    recording = true;
+                    recording = !recording;
 
                     // Pick observer based on platform
 #ifdef WIN32
@@ -460,7 +460,6 @@ int main(int, char**)
                         imgProcessor->setImageData(events[selectedTestStep].image, events[selectedTestStep].width, events[selectedTestStep].height);
                         imgProcessor->processImage();
                     }
-                    ImGui::Image(500, ImVec2(width, height));
                 }
                 ImGui::EndChild();
             }
