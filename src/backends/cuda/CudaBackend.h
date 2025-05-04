@@ -8,7 +8,7 @@ public:
 	CudaImageProcessor() : ImageProcessor() {}
 	~CudaImageProcessor() {}
 
-	virtual void sobelFilter() override;
+	virtual void processImage() override;
 
 private:
 };

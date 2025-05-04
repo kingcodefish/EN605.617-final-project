@@ -455,17 +455,12 @@ int main(int, char**)
                     int width = aspectRatio * events[selectedTestStep].width;
                     int height = aspectRatio * events[selectedTestStep].height;
                     ImGui::Image(events[selectedTestStep].image, ImVec2(width, height));
-                    if (ImGui::Button("Sobel Filter"))
+                    if (ImGui::Button("Process Image"))
                     {
                         imgProcessor->setImageData(events[selectedTestStep].image, events[selectedTestStep].width, events[selectedTestStep].height);
-                        imgProcessor->sobelFilter();
-                        //cudaGraphicsResource* cudaResource = nullptr;
-                        //cudaGraphicsGLRegisterImage(&cudaResource,
-                        //    events[selectedTestStep].image,
-                        //    GL_TEXTURE_2D,
-                        //    cudaGraphicsRegisterFlagsSurfaceLoadStore);
-
+                        imgProcessor->processImage();
                     }
+                    ImGui::Image(500, ImVec2(width, height));
                 }
                 ImGui::EndChild();
             }

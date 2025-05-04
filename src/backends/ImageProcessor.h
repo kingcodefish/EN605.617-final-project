@@ -17,7 +17,7 @@ public:
 	}
 	unsigned int getImageData() { return m_texID; }
 
-	virtual void sobelFilter() = 0;
+	virtual void processImage() = 0;
 
 protected:
 	// Storage format is flattened RGBA
